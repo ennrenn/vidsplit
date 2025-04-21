@@ -1,125 +1,303 @@
 <!DOCTYPE html>
 <html lang="en">
-  <head>
+<head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Video Frame Extractor</title>
-    <!-- Tailwind CSS CDN for quick styling (optional) -->
+    <title>Video Frame Extractor (Improved)</title>
     <script src="https://cdn.tailwindcss.com"></script>
 
-    <!-- FFmpeg‑wasm & JSZip CDN builds -->
-    <script src="https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.5/dist/ffmpeg.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/dist/ffmpeg.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 
     <style>
-      /* Extra touches */
-      body {
-        @apply bg-slate-50 text-slate-800 flex min-h-screen items-center justify-center p-6;
-      }
-      .card {
-        @apply bg-white shadow-xl rounded-2xl p-8 w-full max-w-xl space-y-6;
-      }
-      progress[value] {
-        @apply w-full h-3 rounded-md overflow-hidden bg-slate-200;
-      }
-      progress[value]::-webkit-progress-value {
-        @apply bg-blue-500;
-      }
-      progress[value]::-moz-progress-bar {
-        @apply bg-blue-500;
-      }
+        /* Extra touches */
+        body {
+            @apply bg-slate-100 text-slate-800 flex min-h-screen items-center justify-center p-4;
+        }
+        .card {
+            @apply bg-white shadow-xl rounded-2xl p-6 sm:p-8 w-full max-w-xl space-y-5;
+        }
+        progress[value] {
+            @apply w-full h-2 rounded-md overflow-hidden;
+            /* Reset appearance */
+            -webkit-appearance: none;
+            appearance: none;
+            /* Default background */
+            @apply bg-slate-200;
+        }
+        /* Webkit progress bar */
+        progress[value]::-webkit-progress-bar {
+             @apply bg-slate-200 rounded-md;
+        }
+        progress[value]::-webkit-progress-value {
+            @apply bg-blue-500 rounded-md transition-all duration-150 ease-linear;
+        }
+        /* Firefox progress bar */
+        progress[value]::-moz-progress-bar {
+             @apply bg-blue-500 rounded-md transition-all duration-150 ease-linear;
+        }
+        .status-message {
+             @apply text-sm text-center min-h-[1.25rem]; /* Reserve space */
+        }
+        .error-message {
+             @apply text-red-600;
+        }
+        .success-message {
+            @apply text-green-600;
+        }
     </style>
-  </head>
-  <body>
+</head>
+<body>
     <div class="card">
-      <h1 class="text-2xl font-semibold text-center">Video Frame Extractor</h1>
+        <h1 class="text-2xl font-semibold text-center mb-4">Video Frame Extractor</h1>
 
-      <label
-        for="uploader"
-        class="flex flex-col items-center justify-center w-full h-24 p-4 border-2 border-dashed rounded-xl cursor-pointer hover:bg-slate-100 transition"
-      >
-        <span class="text-sm text-slate-500">Click or drag a video file here</span>
-        <input id="uploader" type="file" accept="video/*" class="hidden" />
-      </label>
+        <label
+            for="uploader"
+            class="flex flex-col items-center justify-center w-full p-4 border-2 border-dashed rounded-xl cursor-pointer hover:bg-slate-100 transition bg-white"
+        >
+            <span id="upload-label-text" class="text-sm text-slate-500 text-center">
+                Click or drag a video file here
+            </span>
+            <span id="file-name" class="text-sm font-medium text-blue-600 mt-1"></span>
+            <input id="uploader" type="file" accept="video/*" class="hidden" />
+        </label>
 
-      <button
-        id="process"
-        class="w-full py-2 rounded-xl bg-blue-600 text-white font-medium disabled:opacity-40"
-        disabled
-      >
-        Extract Frames
-      </button>
+        <button
+            id="process"
+            class="w-full py-2.5 rounded-xl bg-blue-600 text-white font-medium disabled:opacity-40 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-blue-400 focus:ring-offset-2 transition ease-in-out duration-150"
+            disabled
+        >
+            Extract Frames
+        </button>
 
-      <progress id="progress" value="0" max="1" class="hidden"></progress>
+        <div id="status" class="status-message"></div>
 
-      <div id="download" class="text-center"></div>
+        <progress id="progress" value="0" max="1" class="hidden w-full"></progress>
+
+        <div id="download" class="text-center mt-4"></div>
     </div>
 
     <script>
-      const { createFFmpeg, fetchFile } = FFmpeg;
-      const ffmpeg = createFFmpeg({ log: true });
-
-      const inputEl = document.getElementById("uploader");
-      const processBtn = document.getElementById("process");
-      const progressBar = document.getElementById("progress");
-      const downloadDiv = document.getElementById("download");
-
-      // Enable button once a file is chosen
-      inputEl.addEventListener("change", () => {
-        processBtn.disabled = !inputEl.files.length;
-      });
-
-      processBtn.addEventListener("click", async () => {
-        const file = inputEl.files[0];
-        if (!file) return;
-
-        processBtn.disabled = true;
-        progressBar.classList.remove("hidden");
-        downloadDiv.innerHTML = "";
-
-        if (!ffmpeg.isLoaded()) {
-          await ffmpeg.load();
+        // Check if running in a secure context (required for SharedArrayBuffer used by some FFmpeg versions/features)
+        if (!crossOriginIsolated && window.location.protocol !== 'file:') {
+             console.warn('App may run faster or enable more features if served with COOP/COEP headers. See https://ffmpegwasm.netlify.app/docs/getting-started/usage#enabling-sharedarraybuffer');
         }
 
-        ffmpeg.setProgress(({ ratio }) => {
-          progressBar.value = ratio;
+        const { createFFmpeg, fetchFile } = FFmpeg; // Ensure FFmpeg is in global scope from CDN
+        let ffmpeg; // Initialize later
+        let isProcessing = false; // State variable
+
+        const inputEl = document.getElementById("uploader");
+        const processBtn = document.getElementById("process");
+        const progressBar = document.getElementById("progress");
+        const downloadDiv = document.getElementById("download");
+        const statusDiv = document.getElementById("status");
+        const fileNameEl = document.getElementById("file-name");
+        const uploadLabelText = document.getElementById("upload-label-text");
+        // Optional FPS input
+        // const fpsInput = document.getElementById('fps');
+
+        let selectedFile = null;
+
+        // --- Helper Function for Status Updates ---
+        function updateStatus(message, isError = false, isSuccess = false) {
+            statusDiv.textContent = message;
+            statusDiv.classList.toggle('error-message', isError);
+            statusDiv.classList.toggle('success-message', isSuccess && !isError);
+            if (!isError && !isSuccess) {
+                 statusDiv.classList.remove('error-message', 'success-message');
+            }
+            console.log(`Status: ${message}`);
+            if(isError) console.error(message);
+        }
+
+        // --- Initialize FFmpeg Instance ---
+        // We create it once, but load the core on demand
+        try {
+            ffmpeg = createFFmpeg({
+                log: true, // Enable FFmpeg logging in console
+                progress: ({ ratio }) => {
+                    if (ratio >= 0 && ratio <= 1) {
+                        progressBar.value = ratio;
+                    } else {
+                        // Sometimes FFmpeg gives ratios outside 0-1, clamp them
+                        progressBar.value = Math.max(0, Math.min(1, ratio));
+                    }
+                },
+            });
+        } catch (err) {
+             updateStatus('Failed to initialize FFmpeg. Your browser might not be supported.', true);
+             console.error("FFmpeg Creation Error:", err);
+             processBtn.disabled = true; // Permanently disable if creation fails
+             inputEl.disabled = true;
+        }
+
+
+        // --- Event Listener for File Selection ---
+        inputEl.addEventListener("change", (event) => {
+            selectedFile = event.target.files[0];
+            if (selectedFile && ffmpeg) { // Check if ffmpeg was initialized
+                fileNameEl.textContent = `Selected: ${selectedFile.name}`;
+                uploadLabelText.textContent = 'Change video file'; // Change label text
+                processBtn.disabled = false;
+                downloadDiv.innerHTML = ""; // Clear previous download link
+                progressBar.classList.add("hidden"); // Hide progress bar
+                progressBar.value = 0;
+                updateStatus(""); // Clear status
+            } else {
+                fileNameEl.textContent = "";
+                uploadLabelText.textContent = 'Click or drag a video file here';
+                processBtn.disabled = true;
+                selectedFile = null;
+            }
         });
 
-        // Write input video to FFmpeg virtual FS
-        ffmpeg.FS("writeFile", "input", await fetchFile(file));
+        // --- Event Listener for Button Click ---
+        processBtn.addEventListener("click", async () => {
+            if (!selectedFile || isProcessing || !ffmpeg) {
+                console.warn("Processing aborted. No file, already processing, or FFmpeg not ready.");
+                return;
+            }
 
-        /*
-          -q:v 2 ≈ visually lossless PNG-like quality
-          Feel free to change to jpeg for smaller files: '-q:v','2','frame_%05d.jpg'
-        */
-        await ffmpeg.run("-i", "input", "-q:v", "2", "frame_%05d.png");
+            isProcessing = true;
+            processBtn.disabled = true;
+            inputEl.disabled = true; // Prevent changing file during processing
+            progressBar.classList.remove("hidden");
+            progressBar.value = 0;
+            downloadDiv.innerHTML = ""; // Clear previous link
+            updateStatus("Starting...");
 
-        /* Collect all generated frames */
-        const frameFiles = ffmpeg
-          .FS("readdir", "/")
-          .filter((name) => name.match(/^frame_\d+\.png$/));
+            const inputFilename = "input_video"; // Consistent input name in virtual FS
+            const outputPattern = "frame_%05d.png"; // Output frames as PNG
 
-        const zip = new JSZip();
-        for (const name of frameFiles) {
-          const data = ffmpeg.FS("readFile", name);
-          zip.file(name, data);
-        }
+            try {
+                // 1. Load FFmpeg Core (if not already loaded)
+                if (!ffmpeg.isLoaded()) {
+                    updateStatus("Loading FFmpeg core (~31 MB)...");
+                    await ffmpeg.load();
+                }
+                updateStatus("FFmpeg ready. Reading file...");
 
-        const blob = await zip.generateAsync({ type: "blob" });
-        const url = URL.createObjectURL(blob);
+                // 2. Write Input File to Virtual Filesystem
+                let fileData;
+                try {
+                     fileData = await fetchFile(selectedFile);
+                     updateStatus("Writing file to virtual system...");
+                     ffmpeg.FS('writeFile', inputFilename, fileData);
+                } catch (readError) {
+                     throw new Error(`Failed to read or write file: ${readError.message}`);
+                } finally {
+                     // Hint to garbage collector, might help on memory constrained devices
+                     fileData = null;
+                }
 
-        const link = document.createElement("a");
-        link.href = url;
-        link.download = "frames.zip";
-        link.textContent = "Download frames.zip";
-        link.className =
-          "inline-block mt-4 px-4 py-2 rounded-xl bg-green-600 text-white font-medium";
 
-        downloadDiv.appendChild(link);
-        progressBar.classList.add("hidden");
-        progressBar.value = 0;
-        processBtn.disabled = false;
-      });
+                updateStatus("Processing video... (This may take a while)");
+                progressBar.value = 0; // Reset progress before run
+
+                // 3. Run FFmpeg Command
+                const ffmpegCommand = ["-i", inputFilename];
+
+                // --- Optional: Add frame rate argument ---
+                // const fpsValue = fpsInput ? parseFloat(fpsInput.value) : null;
+                // if (fpsValue && fpsValue > 0) {
+                //     console.log(`Extracting at ${fpsValue} FPS`);
+                //     ffmpegCommand.push("-vf", `fps=${fpsValue}`);
+                // } else {
+                //     console.log("Extracting all frames");
+                // }
+                 // --- End Optional ---
+
+                 // Add quality and output pattern
+                 ffmpegCommand.push("-q:v", "2", outputPattern); // Visually lossless PNG quality
+
+                await ffmpeg.run(...ffmpegCommand);
+                updateStatus("Video processing finished. Reading output files...");
+                progressBar.value = 1; // Ensure progress hits 100%
+
+                // 4. Collect Output Frames
+                const frameFiles = ffmpeg.FS('readdir', '/')
+                                     .filter(name => name.match(/^frame_\d+\.png$/));
+
+                if (frameFiles.length === 0) {
+                    throw new Error("No frames were extracted. Check FFmpeg logs in console for errors (e.g., unsupported codec).");
+                }
+
+                updateStatus(`Found ${frameFiles.length} frames. Zipping...`);
+
+                // 5. Zip the Frames
+                const zip = new JSZip();
+                for (const frameName of frameFiles) {
+                    try {
+                         const data = ffmpeg.FS('readFile', frameName);
+                         zip.file(frameName, data, { binary: true });
+                         // Don't unlink yet, might be needed if zipping fails midway
+                    } catch (zipReadErr) {
+                         console.error(`Error reading frame ${frameName} for zipping:`, zipReadErr);
+                         // Decide how to handle: skip frame, or abort? Abort might be safer.
+                         throw new Error(`Failed to read frame ${frameName} from virtual FS.`);
+                    }
+                }
+
+
+                updateStatus("Generating zip file...");
+                const blob = await zip.generateAsync({
+                    type: "blob",
+                    compression: "DEFLATE", // Standard zip compression
+                    compressionOptions: {
+                        level: 6 // Balance between speed and size (1=fastest, 9=best compression)
+                    }
+                });
+                const url = URL.createObjectURL(blob);
+
+                // 6. Create Download Link
+                const link = document.createElement("a");
+                link.href = url;
+                const outputZipFilename = `${selectedFile.name.replace(/\.[^/.]+$/, "")}_frames.zip`;
+                link.download = outputZipFilename;
+                link.textContent = `Download ${outputZipFilename} (${(blob.size / 1024 / 1024).toFixed(2)} MB)`;
+                link.className = "inline-block mt-2 px-4 py-2 rounded-xl bg-green-600 text-white font-medium hover:bg-green-700 transition";
+                downloadDiv.appendChild(link);
+                updateStatus(`Successfully extracted ${frameFiles.length} frames!`, false, true);
+
+
+            } catch (error) {
+                updateStatus(`Error: ${error.message || 'An unknown error occurred.'}`, true);
+                console.error("Processing Error:", error);
+                progressBar.classList.add("hidden"); // Hide progress on error
+            } finally {
+                // 7. Cleanup Virtual Filesystem (even if errors occurred)
+                 updateStatus("Cleaning up virtual files...");
+                 try {
+                    if (ffmpeg.isLoaded()) { // Only if loaded
+                         // Attempt to remove input file
+                         try { ffmpeg.FS('unlink', inputFilename); } catch (e) { /* ignore if not found */ }
+
+                         // Attempt to remove output frames (check existence before unlinking)
+                         ffmpeg.FS('readdir', '/')
+                            .filter(name => name.match(/^frame_\d+\.png$/))
+                            .forEach(frameName => {
+                                try { ffmpeg.FS('unlink', frameName); } catch (e) { /* ignore */ }
+                            });
+                         updateStatus("Cleanup complete.", false, statusDiv.classList.contains('success-message')); // Keep success message if it was there
+                    }
+                 } catch (cleanupError) {
+                      console.warn("Error during virtual filesystem cleanup:", cleanupError);
+                      // Don't overwrite main error message if cleanup failed
+                      if (!statusDiv.classList.contains('error-message')) {
+                           updateStatus("Cleanup finished (some files might remain in memory).");
+                      }
+                 }
+
+                // 8. Reset UI State
+                isProcessing = false;
+                processBtn.disabled = !selectedFile; // Re-enable only if a file is still selected
+                inputEl.disabled = false; // Re-enable file input
+                 // Optionally hide progress bar after a delay or keep it visible showing final state
+                 // setTimeout(() => { progressBar.classList.add("hidden"); }, 3000);
+            }
+        });
+
     </script>
-  </body>
+</body>
 </html>
