@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Video Frame Extractor</title>
+    <!-- Tailwind CSS CDN for quick styling (optional) -->
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <!-- FFmpeg‑wasm & JSZip CDN builds -->
+    <script src="https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.5/dist/ffmpeg.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+
+    <style>
+      /* Extra touches */
+      body {
+        @apply bg-slate-50 text-slate-800 flex min-h-screen items-center justify-center p-6;
+      }
+      .card {
+        @apply bg-white shadow-xl rounded-2xl p-8 w-full max-w-xl space-y-6;
+      }
+      progress[value] {
+        @apply w-full h-3 rounded-md overflow-hidden bg-slate-200;
+      }
+      progress[value]::-webkit-progress-value {
+        @apply bg-blue-500;
+      }
+      progress[value]::-moz-progress-bar {
+        @apply bg-blue-500;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <h1 class="text-2xl font-semibold text-center">Video Frame Extractor</h1>
+
+      <label
+        for="uploader"
+        class="flex flex-col items-center justify-center w-full h-24 p-4 border-2 border-dashed rounded-xl cursor-pointer hover:bg-slate-100 transition"
+      >
+        <span class="text-sm text-slate-500">Click or drag a video file here</span>
+        <input id="uploader" type="file" accept="video/*" class="hidden" />
+      </label>
+
+      <button
+        id="process"
+        class="w-full py-2 rounded-xl bg-blue-600 text-white font-medium disabled:opacity-40"
+        disabled
+      >
+        Extract Frames
+      </button>
+
+      <progress id="progress" value="0" max="1" class="hidden"></progress>
+
+      <div id="download" class="text-center"></div>
+    </div>
+
+    <script>
+      const { createFFmpeg, fetchFile } = FFmpeg;
+      const ffmpeg = createFFmpeg({ log: true });
+
+      const inputEl = document.getElementById("uploader");
+      const processBtn = document.getElementById("process");
+      const progressBar = document.getElementById("progress");
+      const downloadDiv = document.getElementById("download");
+
+      // Enable button once a file is chosen
+      inputEl.addEventListener("change", () => {
+        processBtn.disabled = !inputEl.files.length;
+      });
+
+      processBtn.addEventListener("click", async () => {
+        const file = inputEl.files[0];
+        if (!file) return;
+
+        processBtn.disabled = true;
+        progressBar.classList.remove("hidden");
+        downloadDiv.innerHTML = "";
+
+        if (!ffmpeg.isLoaded()) {
+          await ffmpeg.load();
+        }
+
+        ffmpeg.setProgress(({ ratio }) => {
+          progressBar.value = ratio;
+        });
+
+        // Write input video to FFmpeg virtual FS
+        ffmpeg.FS("writeFile", "input", await fetchFile(file));
+
+        /*
+          -q:v 2 ≈ visually lossless PNG-like quality
+          Feel free to change to jpeg for smaller files: '-q:v','2','frame_%05d.jpg'
+        */
+        await ffmpeg.run("-i", "input", "-q:v", "2", "frame_%05d.png");
+
+        /* Collect all generated frames */
+        const frameFiles = ffmpeg
+          .FS("readdir", "/")
+          .filter((name) => name.match(/^frame_\d+\.png$/));
+
+        const zip = new JSZip();
+        for (const name of frameFiles) {
+          const data = ffmpeg.FS("readFile", name);
+          zip.file(name, data);
+        }
+
+        const blob = await zip.generateAsync({ type: "blob" });
+        const url = URL.createObjectURL(blob);
+
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = "frames.zip";
+        link.textContent = "Download frames.zip";
+        link.className =
+          "inline-block mt-4 px-4 py-2 rounded-xl bg-green-600 text-white font-medium";
+
+        downloadDiv.appendChild(link);
+        progressBar.classList.add("hidden");
+        progressBar.value = 0;
+        processBtn.disabled = false;
+      });
+    </script>
+  </body>
+</html>
